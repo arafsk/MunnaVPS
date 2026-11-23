@@ -221,7 +221,7 @@ docker inspect -f '{{json .State.Health}}' munna-vps-desktop | jq
 | Fallback backend serves noVNC | `make up-tigervnc` | ✅ HTTP 200 | 2026-11-23 |
 | Smoke test | `make smoke` | ✅ pass | 2026-11-23 |
 | Backup/restore round-trip | `make backup` + restore | ✅ pass | 2026-11-23 |
-| GitHub push | `git push origin main` | ⏳ pending | — |
+| GitHub push | `git push origin main` | ✅ pass (319ee09) | 2026-11-23 |
 | GitHub Actions CI | push to `main` | ⏳ pending | — |
 | Real domain + Let's Encrypt | `SITE_ADDRESS=<domain>` | ⏳ pending | — |
 | GPU passthrough | `make up-gpu` | ➖ not testable on arm64 host | — |
@@ -243,7 +243,7 @@ docker inspect -f '{{json .State.Health}}' munna-vps-desktop | jq
 - [x] Verify KasmVNC image build on arm64 (current dev host).
 - [x] Verify fallback image build.
 - [x] Run `make smoke` and record results.
-- [ ] Push the scaffold to `origin/main`.
+- [x] Push the scaffold to `origin/main`.
 
 ### P1 — operational quality
 
@@ -333,7 +333,7 @@ Verified end-to-end on macOS arm64 (Docker Desktop 29.9.3):
   Fixed supervisor EACCES by running it as root with per-program users.
 - Backup/restore round-trip passed; sockets excluded from archives.
 - `make health` now waits through Docker's `starting` state.
-- Next: push and watch the first GitHub Actions run; test a real domain/TLS.
+- Pushed to `origin/main` as `319ee09`; GitHub Actions run is the next check.
 
 ### 2026-11-23 — Initial scaffold
 
