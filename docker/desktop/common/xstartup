@@ -1,0 +1,16 @@
+#!/bin/sh
+# XFCE session used by both desktop backends.
+unset SESSION_MANAGER
+unset DBUS_SESSION_BUS_ADDRESS
+
+export XDG_CURRENT_DESKTOP=XFCE
+export XDG_SESSION_TYPE=x11
+export XDG_SESSION_DESKTOP=xfce
+
+# Best-effort audio: KasmVNC can stream the default sink when the browser
+# supports it. Failure here must never stop the desktop.
+if command -v pulseaudio >/dev/null 2>&1; then
+    pulseaudio --start --exit-idle-time=-1 >/dev/null 2>&1 || true
+fi
+
+exec dbus-run-session -- startxfce4

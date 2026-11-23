@@ -1,0 +1,18 @@
+# Optional override: TigerVNC + noVNC fallback instead of KasmVNC.
+#
+#   make up-tigervnc
+#
+# The same XFCE base image is reused; only the backend target and upstream
+# port change.
+services:
+  desktop:
+    build:
+      target: tigervnc
+    image: munna-vps/desktop-tigervnc:${IMAGE_TAG:-latest}
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - curl -fsS http://127.0.0.1:6080/ >/dev/null
+  caddy:
+    environment:
+      DESKTOP_UPSTREAM: desktop:6080

@@ -1,0 +1,13 @@
+# Optional override: pass through a Linux DRM render node for GPU-accelerated
+# rendering (Intel/AMD). Only works on a Linux host with /dev/dri available.
+#
+#   make up-gpu
+#
+# KasmVNC still needs desktop.gpu.hw3d enabled in ~/.vnc/kasmvnc.yaml to use it.
+services:
+  desktop:
+    devices:
+      - /dev/dri:/dev/dri
+    group_add:
+      - video
+      - render

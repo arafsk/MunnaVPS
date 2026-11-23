@@ -1,0 +1,29 @@
+# MunnaVPS reverse proxy.
+#
+# SITE_ADDRESS:
+#   :80                  -> plain HTTP
+#   desktop.example.com  -> automatic HTTPS (Let's Encrypt)
+#   localhost            -> HTTPS with Caddy's internal CA
+#
+# DESKTOP_UPSTREAM:
+#   desktop:6901 (KasmVNC, default) or desktop:6080 (TigerVNC + noVNC).
+
+{$SITE_ADDRESS} {
+	encode zstd gzip
+
+	reverse_proxy {$DESKTOP_UPSTREAM} {
+		# Stream updates immediately instead of buffering them.
+		flush_interval -1
+	}
+
+	header {
+		-Server
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "same-origin"
+	}
+
+	log {
+		output stdout
+		format console
+	}
+}

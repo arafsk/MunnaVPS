@@ -1,0 +1,70 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate compose config
+        run: |
+          cp .env.example .env
+          docker compose config -q
+          docker compose -f docker-compose.yml -f compose/docker-compose.tigervnc.yml config -q
+          docker compose -f docker-compose.yml -f compose/docker-compose.gpu.yml config -q
+
+      - name: Shellcheck
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck
+          shellcheck --source-path=SCRIPTDIR -x scripts/*.sh scripts/lib/*.sh \
+            docker/desktop/*/*.sh tests/*.sh
+
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [kasmvnc, tigervnc]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build ${{ matrix.target }} target
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/desktop/Dockerfile
+          target: ${{ matrix.target }}
+          push: false
+          load: false
+          cache-from: type=gha,scope=${{ matrix.target }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.target }}
+
+  smoke:
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prepare environment
+        run: |
+          cp .env.example .env
+          chmod +x scripts/*.sh tests/*.sh docker/desktop/*/entrypoint.sh
+
+      - name: Run smoke test
+        run: KEEP=0 ./tests/smoke.sh
+
+      - name: Dump logs on failure
+        if: failure()
+        run: docker compose logs --tail=200

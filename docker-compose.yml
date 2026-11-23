@@ -1,0 +1,68 @@
+name: munna-vps
+
+services:
+  desktop:
+    build:
+      context: .
+      dockerfile: docker/desktop/Dockerfile
+      target: kasmvnc
+      args:
+        UBUNTU_TAG: ${UBUNTU_TAG:-latest}
+        KASMVNC_VERSION: ${KASMVNC_VERSION:-latest}
+        KASMVNC_ASSET_URL: ${KASMVNC_ASSET_URL:-}
+    image: munna-vps/desktop:${IMAGE_TAG:-latest}
+    container_name: munna-vps-desktop
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 20s
+    environment:
+      TZ: ${TZ:-UTC}
+      DESKTOP_USER: ${DESKTOP_USER:-munna}
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
+      VNC_PASSWORD: ${VNC_PASSWORD:?Run "make setup" to create .env with VNC_PASSWORD}
+      VNC_RESOLUTION: ${VNC_RESOLUTION:-1920x1080}
+      VNC_DEPTH: ${VNC_DEPTH:-24}
+      VNC_PORT: "6901"
+    volumes:
+      - ${DATA_DIR:-./data}/desktop:/home/${DESKTOP_USER:-munna}
+    shm_size: ${DESKTOP_SHM_SIZE:-2gb}
+    mem_limit: ${DESKTOP_MEM_LIMIT:-4g}
+    cpus: ${DESKTOP_CPUS:-4.0}
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:6901/ | grep -qE '^(200|302|401)$'
+      interval: 15s
+      timeout: 5s
+      start_period: 60s
+      retries: 10
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: munna-vps-caddy
+    restart: unless-stopped
+    depends_on:
+      desktop:
+        condition: service_healthy
+    environment:
+      SITE_ADDRESS: ${SITE_ADDRESS:-:80}
+      DESKTOP_UPSTREAM: ${DESKTOP_UPSTREAM:-desktop:6901}
+    ports:
+      - "${HTTP_PORT:-80}:80"
+      - "${HTTPS_PORT:-443}:443"
+      - "${HTTPS_PORT:-443}:443/udp"
+    volumes:
+      - ./docker/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ${DATA_DIR:-./data}/caddy/data:/data
+      - ${DATA_DIR:-./data}/caddy/config:/config
+    healthcheck:
+      test: ["CMD-SHELL", "grep -qE ':0050 ' /proc/net/tcp /proc/net/tcp6"]
+      interval: 15s
+      timeout: 5s
+      start_period: 10s
+      retries: 5

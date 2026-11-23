@@ -1,0 +1,17 @@
+# Secrets and local state
+.env
+.env.*
+!.env.example
+
+# Runtime data (desktop home, Caddy certs/state)
+data/*
+!data/.gitkeep
+
+# Backups
+backups/*
+!backups/.gitkeep
+
+# Logs and OS noise
+*.log
+.DS_Store
+Thumbs.db
