@@ -26,7 +26,8 @@
 | Persistence | Bind mounts under `./data` (`desktop/`, `caddy/`) |
 | Default limits | 4 GB RAM, 4 vCPU, 2 GB shm |
 | GPU | Software only by default; opt-in `/dev/dri` override |
-| Current status | **Verified on arm64 — initial release ready; CI + public TLS verification pending** |
+| Native host option | `scripts/setup-native.sh` — no Docker: x11vnc shares the physical X11 desktop, or TigerVNC Xvnc runs a virtual desktop; noVNC + password auth |
+| Current status | **Docker stack verified on arm64; native host script added (static verification only)** |
 
 ## 2. Locked product decisions
 
@@ -76,6 +77,7 @@ Full detail: `docs/ARCHITECTURE.md`.
 | `docker/desktop/tigervnc/supervisord.conf` | Xvnc + websockify supervision |
 | `docker/caddy/Caddyfile` | Site block, WebSocket proxy, TLS |
 | `scripts/setup.sh` | `.env` + password + data dirs |
+| `scripts/setup-native.sh` | Standalone no-Docker host setup: shared X11 or virtual desktop, noVNC, systemd |
 | `scripts/lib/common.sh` | Shared env loading / URL helpers |
 | `scripts/healthcheck.sh` | Container + HTTP checks |
 | `scripts/backup.sh` / `restore.sh` | Home directory snapshots |
@@ -226,15 +228,23 @@ docker inspect -f '{{json .State.Health}}' munna-vps-desktop | jq
 | Real domain + Let's Encrypt | `SITE_ADDRESS=<domain>` | ⏳ pending | — |
 | GPU passthrough | `make up-gpu` | ➖ not testable on arm64 host | — |
 | Audio streaming | manual browser check | ⏳ pending | — |
+| Native script syntax | `bash -n scripts/setup-native.sh` | ✅ pass (macOS bash 3.2) | 2026-11-27 |
+| Native script shellcheck | `shellcheck --shell=bash scripts/setup-native.sh` | ✅ clean | 2026-11-27 |
+| Native launcher lifecycle | fake Xvnc/xauth + session harness | ✅ start, TERM cleanup | 2026-11-27 |
+| Native setup on real Linux | `sudo scripts/setup-native.sh ...` | ⏳ pending (no Linux host / Docker daemon offline) | — |
 
 ## 8. Environment and secrets rules
 
 - `.env` is the only place for credentials; it is gitignored and mode 0600.
 - `.env.example` must contain only placeholders, never a real password.
 - `data/` and `backups/` are gitignored; never force-add them.
-- Scripts must not print `VNC_PASSWORD` (health check only prints usernames).
-- The generated password is 24 alphanumeric characters.
-- `DESKTOP_USER` must match `^[a-z_][a-z0-9_-]*$`; the entrypoint enforces it.
+- Scripts must not print `VNC_PASSWORD` during normal operation (health check
+  only prints usernames). The native script's explicit `--print-password` flag
+  is the one intentional exception.
+- The Docker stack generates a 24-character alphanumeric password; native mode
+  generates 8 because VNC authentication truncates to 8 characters.
+- In the Docker stack, `DESKTOP_USER` must match `^[a-z_][a-z0-9_-]*$`; the
+  entrypoint enforces it. Native mode accepts existing Linux usernames.
 
 ## 9. Roadmap / backlog
 
@@ -252,6 +262,7 @@ docker inspect -f '{{json .State.Health}}' munna-vps-desktop | jq
 - [ ] Test with a real domain + Let's Encrypt certificate.
 - [ ] Add a screenshot to the README (only if the user asks for one).
 - [ ] Confirm audio behavior in KasmVNC; document if disabled.
+- [ ] Runtime-test `scripts/setup-native.sh` on a real Linux host (share and virtual modes).
 
 ### P2 — optional extensions
 
@@ -293,6 +304,17 @@ docker inspect -f '{{json .State.Health}}' munna-vps-desktop | jq
 - **macOS bind mounts** report host ownership; this is normal.
 - **Default XFCE background is black** with the minimal package set. Cosmetic
   only; add `ubuntu-wallpapers` and set a background if desired.
+- **Native script is not runtime-tested yet.** It was syntax- and
+  shellcheck-verified and its Xvnc launcher was exercised with fakes, but no
+  real Linux host was available. Test both modes before relying on it.
+- **Native share mode requires an X11 session.** Wayland-only hosts (Xwayland,
+  no Xorg) are rejected with guidance: use `--virtual`, log in with Xorg, or
+  pass `--force` for XWayland-only apps.
+- **VNC auth truncates to 8 characters.** Native mode generates an 8-character
+  password and stores a root-only plaintext copy for `--print-password`.
+- **Arch has no official noVNC/websockify packages.** The script downloads
+  noVNC and falls back to a pip-installed websockify under
+  `/var/lib/munnavps/python`.
 
 ## 11. Decision log
 
@@ -311,8 +333,25 @@ docker inspect -f '{{json .State.Health}}' munna-vps-desktop | jq
 | 2026-11-23 | Add desktop user to `ssl-cert` | KasmVNC validates the snakeoil cert paths even with TLS disabled. |
 | 2026-11-23 | supervisord root + per-program user | Non-root supervisord could not open Docker's `/dev/stdout` dispatchers (EACCES). |
 | 2026-11-23 | Exclude sockets from backups | BSD tar cannot archive Unix sockets in pax format. |
+| 2026-11-27 | Add a standalone no-Docker host setup | Owner requested sharing a physical Linux machine over VNC; default shares the real X11 desktop via x11vnc, `--virtual` uses TigerVNC Xvnc for Wayland/headless hosts. |
+| 2026-11-27 | Native VNC stays loopback-only behind websockify | Avoids exposing raw VNC; a non-loopback bind requires `--tls` unless `--insecure` is explicit. |
+| 2026-11-27 | Launch Xvnc directly, not the `vncserver` wrapper | New TigerVNC releases rewrote the wrapper's CLI and session selection; direct Xvnc + our xstartup is stable across distros. |
 
 ## 12. Session log
+
+### 2026-11-27 — Native (no-Docker) host setup script
+
+- Added `scripts/setup-native.sh`, a self-contained root script for physical
+  Linux hosts. Default `share` mode attaches x11vnc to the active X11 display;
+  `--virtual` runs TigerVNC `Xvnc` plus a detected desktop (XFCE by default
+  when `--install-desktop` is used).
+- Both modes serve noVNC through websockify with password auth, loopback-only
+  VNC, optional self-signed TLS, and systemd units. No idle/session timeouts.
+- Verified `bash -n` and clean `shellcheck` for the setup script and the
+  generated launcher; exercised the launcher's start, timeout, and SIGTERM
+  cleanup paths with fake `Xvnc`/`xauth`.
+- Runtime testing on a real Linux host is still pending (Docker daemon offline
+  on the dev host; no Linux VM available this session).
 
 ### 2026-11-23 — Build, runtime, and fallback verification
 
