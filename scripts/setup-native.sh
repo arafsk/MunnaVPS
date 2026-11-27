@@ -186,7 +186,7 @@ pkg_try_install() {
 installed_base_packages() {
   local -a pkgs=(openssl curl ca-certificates)
   if [[ "${MODE}" == "share" ]]; then
-    pkgs+=(x11vnc)
+    pkgs+=(x11vnc xauth)
   else
     case "${PKG}" in
       apt)    pkgs+=(tigervnc-standalone-server tigervnc-common tigervnc-tools dbus-x11 xauth) ;;
@@ -358,6 +358,43 @@ free_display() {
   for (( n = 1; n <= 20; n++ )); do
     if [[ ! -S "/tmp/.X11-unix/X${n}" && ! -e "/tmp/.X${n}-lock" ]]; then
       printf ':%s' "${n}"
+      return 0
+    fi
+  done
+  return 1
+}
+
+authfile_has_display() {
+  local file="$1" display="$2"
+  [[ -r "${file}" ]] || return 1
+  if ! command -v xauth >/dev/null 2>&1; then
+    return 0
+  fi
+  xauth -f "${file}" list 2>/dev/null \
+    | awk '{ print $1 }' | grep -Eq "(^|/)unix${display}$"
+}
+
+detect_xauth() {
+  local display="$1" uid candidate
+  [[ -n "${display}" ]] || return 1
+  uid="$(id -u "${DESKTOP_USER}" 2>/dev/null || true)"
+
+  # x11vnc's own "-auth guess" only looks at root's files and the XDM
+  # locations, so a user-owned ~/.Xauthority (startx, lightdm, xfce) is missed.
+  local -a candidates=(
+    "${HOME_DIR}/.Xauthority"
+    "/run/user/${uid}/gdm/Xauthority"
+    "/run/lightdm/root/${display}"
+    "/var/run/lightdm/root/${display}"
+    "/var/lib/lightdm/.Xauthority"
+    "/var/lib/xdm/authdir/authfiles/A${display#:}"
+  )
+  [[ -n "${XAUTHORITY:-}" ]] && candidates+=("${XAUTHORITY}")
+
+  for candidate in "${candidates[@]}"; do
+    [[ -n "${candidate}" ]] || continue
+    if authfile_has_display "${candidate}" "${display}"; then
+      printf '%s' "${candidate}"
       return 0
     fi
   done
@@ -711,6 +748,7 @@ write_units() {
     vnc_exec="${X11VNC_BIN} -display ${DISPLAY_NUM} -auth ${XAUTH}"
     vnc_exec+=" -rfbauth ${CONFIG_DIR}/vnc.pass -rfbport ${VNC_PORT}"
     vnc_exec+=" -localhost -forever -shared -repeat -norc -noxrecord -noxfixes"
+    vnc_exec+=" -noshm"
     vnc_exec+=" -desktop \"MunnaVPS physical desktop\""
 
     cat > "${UNIT_DIR}/munnavps-vnc.service" <<EOF
@@ -757,7 +795,7 @@ Environment="MUNNA_XVNC=${XVNC_BIN}"
 Environment="MUNNA_XSTARTUP=${HOME_DIR}/.vnc/xstartup"
 RuntimeDirectory=munnavps
 RuntimeDirectoryMode=0700
-WorkingDirectory="${HOME_DIR}"
+WorkingDirectory=${HOME_DIR}
 ExecStart=${LAUNCHER}
 Restart=always
 RestartSec=5
@@ -830,11 +868,15 @@ wait_for_vnc() {
 }
 
 wait_for_web() {
-  local i scheme
+  local i scheme host
   scheme="http"
   (( USE_TLS == 1 )) && scheme="https"
+  host="127.0.0.1"
+  if [[ "${BIND_ADDR}" != "0.0.0.0" && "${BIND_ADDR}" != "127.0.0.1" ]]; then
+    host="${BIND_ADDR}"
+  fi
   for (( i = 0; i < 20; i++ )); do
-    if curl -fsSk --max-time 3 -o /dev/null "${scheme}://127.0.0.1:${WEB_PORT}/"; then
+    if curl -fsSk --max-time 3 -o /dev/null "${scheme}://${host}:${WEB_PORT}/"; then
       return 0
     fi
     sleep 1
@@ -1094,6 +1136,14 @@ main() {
       [[ "${XAUTH}" =~ ^[A-Za-z0-9._/-]+$ ]] \
         || die "--xauth may only contain letters, digits, '.', '_', '/', and '-'"
       [[ -f "${XAUTH}" ]] || die "X authority file not found: ${XAUTH}"
+    else
+      detected_xauth="$(detect_xauth "${DISPLAY_NUM}" || true)"
+      if [[ -n "${detected_xauth}" ]]; then
+        XAUTH="${detected_xauth}"
+        log "Using X authority file ${XAUTH}"
+      else
+        log "No X authority file found; letting x11vnc guess (may fail on some desktops)"
+      fi
     fi
     log "Sharing X display ${DISPLAY_NUM}"
   else

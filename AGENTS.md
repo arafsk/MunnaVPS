@@ -27,7 +27,7 @@
 | Default limits | 4 GB RAM, 4 vCPU, 2 GB shm |
 | GPU | Software only by default; opt-in `/dev/dri` override |
 | Native host option | `scripts/setup-native.sh` — no Docker: x11vnc shares the physical X11 desktop, or TigerVNC Xvnc runs a virtual desktop; noVNC + password auth |
-| Current status | **Docker stack verified on arm64; native host script added (static verification only)** |
+| Current status | **Docker stack verified on arm64; native script runtime-verified in an Ubuntu 24.04 systemd container (virtual + share); physical host pending** |
 
 ## 2. Locked product decisions
 
@@ -231,7 +231,9 @@ docker inspect -f '{{json .State.Health}}' munna-vps-desktop | jq
 | Native script syntax | `bash -n scripts/setup-native.sh` | ✅ pass (macOS bash 3.2) | 2026-11-27 |
 | Native script shellcheck | `shellcheck --shell=bash scripts/setup-native.sh` | ✅ clean | 2026-11-27 |
 | Native launcher lifecycle | fake Xvnc/xauth + session harness | ✅ start, TERM cleanup | 2026-11-27 |
-| Native setup on real Linux | `sudo scripts/setup-native.sh ...` | ⏳ pending (no Linux host / Docker daemon offline) | — |
+| Native virtual mode on Ubuntu 24.04 | `setup-native.sh --virtual --install-desktop --bind <ip> --tls` | ✅ Xvnc + XFCE 1920x1080 render, noVNC 200 | 2026-11-27 |
+| Native share mode on Ubuntu 24.04 | `setup-native.sh --display :N` (x11vnc) | ✅ x11vnc active, no restarts, noVNC 200 | 2026-11-27 |
+| Native setup on physical host | `sudo scripts/setup-native.sh ...` | ⏳ pending (no physical Linux host) | — |
 
 ## 8. Environment and secrets rules
 
@@ -304,9 +306,20 @@ docker inspect -f '{{json .State.Health}}' munna-vps-desktop | jq
 - **macOS bind mounts** report host ownership; this is normal.
 - **Default XFCE background is black** with the minimal package set. Cosmetic
   only; add `ubuntu-wallpapers` and set a background if desired.
-- **Native script is not runtime-tested yet.** It was syntax- and
-  shellcheck-verified and its Xvnc launcher was exercised with fakes, but no
-  real Linux host was available. Test both modes before relying on it.
+- **Native script runtime-verified in a container, not a physical host.** An
+  Ubuntu 24.04 systemd container (Docker, arm64) runs both modes end to end:
+  `--virtual` boots XFCE on TigerVNC and renders 1920x1080; share mode attaches
+  x11vnc to an X display. A physical machine with lightdm/gdm keep pending.
+- **Never quote `WorkingDirectory=` in generated units.** systemd does not strip
+  quotes there, so `WorkingDirectory="/home/user"` makes the unit "bad-setting"
+  and the backend never starts. Only `Environment=` and `ExecStart=` accept
+  quotes.
+- **x11vnc as root needs `-noshm`.** Sharing another user's X server without
+  it crashes with `BadAccess ... MIT-SHM (opcode 131)`. The generated share-mode
+  unit passes `-noshm`.
+- **x11vnc `-auth guess` misses `~/.Xauthority`.** Its guess logic only checks
+  root's files and XDM paths. Share mode now detects `~/.Xauthority`, gdm,
+  lightdm and xdm locations, with `--xauth <path>` as the escape hatch.
 - **Native share mode requires an X11 session.** Wayland-only hosts (Xwayland,
   no Xorg) are rejected with guidance: use `--virtual`, log in with Xorg, or
   pass `--force` for XWayland-only apps.
@@ -336,8 +349,29 @@ docker inspect -f '{{json .State.Health}}' munna-vps-desktop | jq
 | 2026-11-27 | Add a standalone no-Docker host setup | Owner requested sharing a physical Linux machine over VNC; default shares the real X11 desktop via x11vnc, `--virtual` uses TigerVNC Xvnc for Wayland/headless hosts. |
 | 2026-11-27 | Native VNC stays loopback-only behind websockify | Avoids exposing raw VNC; a non-loopback bind requires `--tls` unless `--insecure` is explicit. |
 | 2026-11-27 | Launch Xvnc directly, not the `vncserver` wrapper | New TigerVNC releases rewrote the wrapper's CLI and session selection; direct Xvnc + our xstartup is stable across distros. |
+| 2026-11-27 | Detect the X authority file instead of `-auth guess` | x11vnc's guess misses a user-owned `~/.Xauthority` (startx/XFCE/lightdm); share mode now probes the standard paths and keeps `--xauth` as an override. |
+| 2026-11-27 | Add `-noshm` to share-mode x11vnc | As root against another user's X server, MIT-SHM attach fails with `BadAccess` and x11vnc exits; `-noshm` trades some throughput for a working share. |
+| 2026-11-27 | Do not quote `WorkingDirectory=` in units | systemd keeps the quotes, so the unit fails as `bad-setting`; verified with an Ubuntu 24.04 systemd container. |
 
 ## 12. Session log
+
+### 2026-11-27 — Native script runtime fixes (Ubuntu 24.04)
+
+- Reproduced on a Docker `ubuntu:24.04` systemd container (arm64). Virtual mode
+  failed with `Unit munnavps-vnc.service has a bad unit file setting` because the
+  generated unit had `WorkingDirectory="/home/munna"`; systemd does not strip
+  quotes there. Removed the quotes.
+- Share mode failed twice: x11vnc's `-auth guess` does not find
+  `~/.Xauthority`, and running as root against the user's X server then crashed
+  with `BadAccess ... MIT-SHM`. Added auth-file auto-detection
+  (`~/.Xauthority`, gdm, lightdm, xdm, `--xauth` override) and `-noshm`.
+- `wait_for_web` now probes the actual `--bind` address instead of always
+  `127.0.0.1`, so a specific bind no longer fails verification.
+- Verified end to end: `--virtual --install-desktop --bind <ip> --tls` starts
+  Xvnc + XFCE (1920x1080 screenshot via `xwd`, no error dialogs), noVNC returns
+  200, VNC stays on 127.0.0.1; share mode leaves x11vnc active with 0 restarts
+  and noVNC 200. `bash -n` and `shellcheck` clean.
+- Physical-host testing (lightdm/gdm, real Xorg) is still pending.
 
 ### 2026-11-27 — Native (no-Docker) host setup script
 

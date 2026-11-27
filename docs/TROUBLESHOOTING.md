@@ -196,6 +196,54 @@ docker compose exec desktop top
 
 Use `make shell` to kill the offending process.
 
+## Native (no-Docker) mode
+
+`scripts/setup-native.sh` runs on the host, not in a container. Start with:
+
+```bash
+systemctl status munnavps-vnc munnavps-web
+journalctl -u munnavps-vnc -u munnavps-web -n 50 --no-pager
+```
+
+### `Unit munnavps-vnc.service has a bad unit file setting`
+
+On systemd this usually means a quoted path in a setting that does not strip
+quotes, for example `WorkingDirectory="/home/user"`. Pull the current script
+(fixed 2026-11-27) and re-run it; it regenerates both units.
+
+### `the VNC backend failed to start` with `BadAccess ... MIT-SHM`
+
+Symptom in `journalctl -u munnavps-vnc`:
+
+```text
+X Error of failed request:  BadAccess (attempt to access private resource denied)
+  Major opcode of failed request:  131 (MIT-SHM)
+```
+
+Cause: x11vnc runs as root against an X server owned by the desktop user, so
+mit-shm access is denied. The script passes `-noshm` since 2026-11-27. If you
+generated the units with an older copy, re-run the setup.
+
+### `-auth guess: failed for display=':0'`
+
+x11vnc's built-in guess only looks at root's files and the XDM locations, so a
+user-owned `~/.Xauthority` (startx, XFCE, lightdm) is not found. The script
+detects `~/.Xauthority`, gdm, lightdm and xdm paths automatically. If detection
+still misses your display manager, pass the file explicitly:
+
+```bash
+sudo scripts/setup-native.sh --display :0 --xauth /home/munna/.Xauthority
+```
+
+### Share mode finds no display
+
+Share mode attaches x11vnc to an existing X11 session, so it needs a logged-in
+Xorg/XFCE desktop. Over SSH with no session, use the virtual backend instead:
+
+```bash
+sudo scripts/setup-native.sh --virtual --install-desktop
+```
+
 ## Reset everything (destructive)
 
 ```bash
